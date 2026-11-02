@@ -1,0 +1,48 @@
+name: build
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests-dsp:
+    # moteur d'analyse sans JUCE : loudness (valeurs EBU), spectre, ADSR, coach, prédictions d'export
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compiler et lancer les tests
+        run: |
+          g++ -std=c++17 -O2 -pthread -o loud_test Tests/loud_test.cpp
+          g++ -std=c++17 -O2 -pthread -o dsp_test Tests/dsp_test.cpp
+          g++ -std=c++17 -O2 -pthread -o coach_test Tests/coach_test.cpp
+          ./loud_test && ./dsp_test && ./coach_test
+
+  macos:
+    runs-on: macos-15          # macos-14 est retiré le 2 nov. 2026
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configurer (AU + VST3 universels)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMASK_BUILD_TESTS=OFF
+      - name: Compiler
+        run: cmake --build build --config Release --target MaskScope_AU MaskScope_VST3 -j 4
+      - name: Signature ad hoc
+        run: |
+          codesign --force --deep -s - build/MaskScope_artefacts/Release/AU/mask-scope.component
+          codesign --force --deep -s - build/MaskScope_artefacts/Release/VST3/mask-scope.vst3
+      - name: Installateur .pkg
+        run: |
+          mkdir -p pkgroot/Library/Audio/Plug-Ins/Components pkgroot/Library/Audio/Plug-Ins/VST3
+          cp -R build/MaskScope_artefacts/Release/AU/mask-scope.component pkgroot/Library/Audio/Plug-Ins/Components/
+          cp -R build/MaskScope_artefacts/Release/VST3/mask-scope.vst3 pkgroot/Library/Audio/Plug-Ins/VST3/
+          pkgbuild --root pkgroot --identifier com.mask.scope --version 1.0.0 --install-location / mask-scope-1.0.0.pkg
+      - name: auval (non bloquant)
+        continue-on-error: true
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R build/MaskScope_artefacts/Release/AU/mask-scope.component ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          auval -v aufx Mscp Mask
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mask-scope-1.0.0
+          path: mask-scope-1.0.0.pkg
